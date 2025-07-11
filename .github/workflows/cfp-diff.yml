@@ -16,30 +16,65 @@ jobs:
       - name: Get changed CFN templates
         id: changed-files
         run: |
-          git diff --name-only ${{ github.event.before }} ${{ github.sha }} \
-            | grep -E '\.(yml|yaml)$' > changed_templates.txt
-          echo "Changed files:"
-          cat changed_templates.txt
+          echo "Base ref: ${{ github.event.pull_request.base.sha }}"
+          echo "Head ref: ${{ github.sha }}"
+          
+          # Get changed files between base and head
+          git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.sha }} \
+            | grep -E '\.(yml|yaml)$' > changed_templates.txt || echo "No YAML files changed"
+          
+          echo "Changed CloudFormation templates:"
+          if [ -s changed_templates.txt ]; then
+            cat changed_templates.txt
+            echo "templates_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No CloudFormation templates were changed."
+            echo "templates_changed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Setup Python
+        if: steps.changed-files.outputs.templates_changed == 'true'
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.changed-files.outputs.templates_changed == 'true'
         run: |
-          pip install PyYAML deepdiff
+          pip install PyYAML
 
-      - name: Run CFN diff script
+      - name: Generate diff summary
         id: diff
+        if: steps.changed-files.outputs.templates_changed == 'true'
         run: |
-          python scripts/cfn_diff.py \
-            ${{ github.event.before }} \
-            ${{ github.sha }} \
-            > summary.md
+          echo "# CloudFormation Diff Summary" > summary.md
+          echo "" >> summary.md
+          echo "## Changed Templates" >> summary.md
+          
+          while IFS= read -r file; do
+            echo "- \`$file\`" >> summary.md
+          done < changed_templates.txt
+          
+          echo "" >> summary.md
+          echo "## Detailed Changes" >> summary.md
+          
+          while IFS= read -r file; do
+            echo "" >> summary.md
+            echo "### $file" >> summary.md
+            echo '```diff' >> summary.md
+            git diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} -- "$file" >> summary.md
+            echo '```' >> summary.md
+          done < changed_templates.txt
+          
+          echo "Generated summary:"
+          cat summary.md
 
       - name: Post or update PR comment
+        if: steps.changed-files.outputs.templates_changed == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
+          body-path: summary.md
+          comment-author: 'github-actions[bot]'
+          edit-mode: replace
