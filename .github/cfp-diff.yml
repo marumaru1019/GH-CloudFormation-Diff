@@ -41,5 +41,5 @@ jobs:
       - name: Post or update PR comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
