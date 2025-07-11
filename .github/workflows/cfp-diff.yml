@@ -4,6 +4,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   cfn-diff:
     runs-on: ubuntu-latest
@@ -18,11 +23,11 @@ jobs:
         run: |
           echo "Base ref: ${{ github.event.pull_request.base.sha }}"
           echo "Head ref: ${{ github.sha }}"
-          
+
           # Get changed files between base and head
           git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.sha }} \
             | grep -E '\.(yml|yaml)$' > changed_templates.txt || echo "No YAML files changed"
-          
+
           echo "Changed CloudFormation templates:"
           if [ -s changed_templates.txt ]; then
             cat changed_templates.txt
@@ -50,14 +55,14 @@ jobs:
           echo "# CloudFormation Diff Summary" > summary.md
           echo "" >> summary.md
           echo "## Changed Templates" >> summary.md
-          
+
           while IFS= read -r file; do
             echo "- \`$file\`" >> summary.md
           done < changed_templates.txt
-          
+
           echo "" >> summary.md
           echo "## Detailed Changes" >> summary.md
-          
+
           while IFS= read -r file; do
             echo "" >> summary.md
             echo "### $file" >> summary.md
@@ -65,7 +70,7 @@ jobs:
             git diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} -- "$file" >> summary.md
             echo '```' >> summary.md
           done < changed_templates.txt
-          
+
           echo "Generated summary:"
           cat summary.md
 
