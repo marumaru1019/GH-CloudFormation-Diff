@@ -78,7 +78,7 @@ jobs:
         if: steps.changed-files.outputs.templates_changed == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
           body-path: summary.md
           comment-author: 'github-actions[bot]'
