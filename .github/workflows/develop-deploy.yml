@@ -1,0 +1,25 @@
+name: Development Deploy
+
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Hello World
+        run: |
+          echo "Hello World!"
+          echo "Deployed to development environment"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Timestamp: $(date)"

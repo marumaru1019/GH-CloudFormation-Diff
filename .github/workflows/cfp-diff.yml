@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   cfn-diff:
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
