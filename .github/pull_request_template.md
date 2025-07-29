@@ -139,4 +139,4 @@ Closes #
 
 ---
 **⚠️ 重要**: この変更をマージする前に、必ず開発環境での十分なテストとレビューを完了してください。
-<!-- for GitHub Copilot review rule -->
+<!-- for GitHub Copilot review  rule-->
