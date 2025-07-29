@@ -23,10 +23,22 @@ Parameters:
     Type: String
     MinLength: 9
     MaxLength: 18
-    Default: 0.0.0.0/0
+    Default: 10.0.0.0/8
     AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
     ConstraintDescription: Must be a valid IP CIDR range of the form x.x.x.x/x
-    Description: The IP address range that can be used to SSH to the EC2 instances
+    Description: The IP address range that can be used to SSH to the EC2 instances (Default is private network only)
+
+  EnableDetailedMonitoring:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Enable detailed monitoring for the EC2 instance
+
+  EnableCloudWatchAgent:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Enable CloudWatch Agent for enhanced monitoring
 
 Mappings:
   AWSInstanceType2Arch:
@@ -54,6 +66,62 @@ Mappings:
       HVM64: ami-0c02fb55956c7d316
 
 Resources:
+  # IAM Role for EC2 Instance
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ec2-role
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # VPC Flow Logs Role
+  VPCFlowLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchLogPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: '*'
+
+  # CloudWatch Log Group for VPC Flow Logs
+  VPCFlowLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vpc/flowlogs/${AWS::StackName}
+      RetentionInDays: 30
+
   # VPC
   VPC:
     Type: AWS::EC2::VPC
@@ -64,6 +132,20 @@ Resources:
       Tags:
         - Key: Name
           Value: Simple-VPC
+
+  # VPC Flow Logs
+  VPCFlowLogs:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceType: VPC
+      ResourceId: !Ref VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref VPCFlowLogsGroup
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogsRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-vpc-flow-logs
 
   # Internet Gateway
   InternetGateway:
@@ -126,7 +208,7 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: !Ref SSHLocation
-          Description: SSH access
+          Description: SSH access from specified CIDR
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
@@ -137,9 +219,104 @@ Resources:
           ToPort: 443
           CidrIp: 0.0.0.0/0
           Description: HTTPS access
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP outbound for package updates
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS outbound for package updates
+        - IpProtocol: tcp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS TCP
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS UDP
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-sg
+
+  # Network ACL for additional security
+  NetworkAcl:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-nacl
+
+  # Network ACL Rules
+  NetworkAclEntryInboundSSH:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: 100
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: !Ref SSHLocation
+      PortRange:
+        From: 22
+        To: 22
+
+  NetworkAclEntryInboundHTTP:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: 110
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 80
+        To: 80
+
+  NetworkAclEntryInboundHTTPS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: 120
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 443
+        To: 443
+
+  NetworkAclEntryInboundEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: 130
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 1024
+        To: 65535
+
+  NetworkAclEntryOutboundAll:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref NetworkAcl
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      CidrBlock: 0.0.0.0/0
+      Egress: true
+
+  NetworkAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      NetworkAclId: !Ref NetworkAcl
 
   # EC2 Instance
   EC2Instance:
@@ -151,19 +328,145 @@ Resources:
       SubnetId: !Ref PublicSubnet
       SecurityGroupIds:
         - !Ref InstanceSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      Monitoring: !Ref EnableDetailedMonitoring
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
           yum update -y
-          yum install -y httpd
+          yum install -y httpd aws-cli
+          
+          # Install CloudWatch Agent if enabled
+          if [ "${EnableCloudWatchAgent}" = "true" ]; then
+            yum install -y amazon-cloudwatch-agent
+            
+            # Configure CloudWatch Agent
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << EOF
+          {
+            "metrics": {
+              "namespace": "CWAgent",
+              "metrics_collected": {
+                "cpu": {
+                  "measurement": ["cpu_usage_idle", "cpu_usage_iowait", "cpu_usage_user", "cpu_usage_system"],
+                  "metrics_collection_interval": 60
+                },
+                "disk": {
+                  "measurement": ["used_percent"],
+                  "metrics_collection_interval": 60,
+                  "resources": ["*"]
+                },
+                "mem": {
+                  "measurement": ["mem_used_percent"],
+                  "metrics_collection_interval": 60
+                }
+              }
+            },
+            "logs": {
+              "logs_collected": {
+                "files": {
+                  "collect_list": [
+                    {
+                      "file_path": "/var/log/httpd/access_log",
+                      "log_group_name": "/aws/ec2/httpd/access",
+                      "log_stream_name": "{instance_id}"
+                    },
+                    {
+                      "file_path": "/var/log/httpd/error_log",
+                      "log_group_name": "/aws/ec2/httpd/error",
+                      "log_stream_name": "{instance_id}"
+                    },
+                    {
+                      "file_path": "/var/log/secure",
+                      "log_group_name": "/aws/ec2/secure",
+                      "log_stream_name": "{instance_id}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+          EOF
+            
+            # Start CloudWatch Agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+          fi
+          
+          # Configure httpd with security headers
           systemctl start httpd
           systemctl enable httpd
-          echo "<h1>Hello from CloudFormation!</h1>" > /var/www/html/index.html
-          echo "<p>Instance ID: $(curl -s http://169.254.169.254/latest/meta-data/instance-id)</p>" >> /var/www/html/index.html
-          echo "<p>Region: ${AWS::Region}</p>" >> /var/www/html/index.html
+          
+          # Create secure web page
+          cat > /var/www/html/index.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Secure EC2 Instance</title>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          </head>
+          <body>
+            <h1>Hello from Secure CloudFormation!</h1>
+            <p>Instance ID: \$(curl -s http://169.254.169.254/latest/meta-data/instance-id)</p>
+            <p>Region: ${AWS::Region}</p>
+            <p>Security Features Enabled:</p>
+            <ul>
+              <li>VPC Flow Logs</li>
+              <li>Network ACLs</li>
+              <li>Restricted SSH Access</li>
+              <li>IAM Role with SSM</li>
+              <li>CloudWatch Monitoring</li>
+            </ul>
+          </body>
+          </html>
+          EOF
+          
+          # Configure security headers in Apache
+          cat >> /etc/httpd/conf/httpd.conf << EOF
+          
+          # Security Headers
+          Header always set X-Frame-Options DENY
+          Header always set X-Content-Type-Options nosniff
+          Header always set X-XSS-Protection "1; mode=block"
+          Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+          Header always set Content-Security-Policy "default-src 'self'"
+          
+          # Hide server information
+          ServerTokens Prod
+          ServerSignature Off
+          EOF
+          
+          # Restart httpd to apply changes
+          systemctl restart httpd
+          
+          # Enable automatic security updates
+          yum install -y yum-cron
+          sed -i 's/apply_updates = no/apply_updates = yes/' /etc/yum/yum-cron.conf
+          systemctl enable yum-cron
+          systemctl start yum-cron
+          
+          # Install and configure fail2ban for SSH protection
+          yum install -y epel-release
+          yum install -y fail2ban
+          
+          cat > /etc/fail2ban/jail.local << EOF
+          [sshd]
+          enabled = true
+          port = ssh
+          logpath = /var/log/secure
+          maxretry = 3
+          bantime = 3600
+          findtime = 600
+          EOF
+          
+          systemctl enable fail2ban
+          systemctl start fail2ban
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-instance
+        - Key: Environment
+          Value: Production
+        - Key: SecurityLevel
+          Value: Enhanced
 
 Outputs:
   InstanceId:
@@ -195,3 +498,21 @@ Outputs:
     Value: !Sub ssh -i ${KeyName}.pem ec2-user@${EC2Instance.PublicDnsName}
     Export:
       Name: !Sub ${AWS::StackName}-SSHCommand
+
+  SSMCommand:
+    Description: Alternative connection via AWS Systems Manager Session Manager
+    Value: !Sub aws ssm start-session --target ${EC2Instance}
+    Export:
+      Name: !Sub ${AWS::StackName}-SSMCommand
+
+  VPCFlowLogsGroup:
+    Description: CloudWatch Log Group for VPC Flow Logs
+    Value: !Ref VPCFlowLogsGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-VPCFlowLogsGroup
+
+  SecurityFeatures:
+    Description: List of enabled security features
+    Value: "VPC Flow Logs, Network ACLs, Restricted SSH, IAM Role with SSM, CloudWatch Monitoring, Fail2ban, Security Headers"
+    Export:
+      Name: !Sub ${AWS::StackName}-SecurityFeatures
