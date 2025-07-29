@@ -1,3 +1,4 @@
+<!-- for GitHub Copilot review rule -->
 # CloudFormation変更レビュー用プルリクエスト
 
 ## 📋 変更概要
@@ -138,3 +139,4 @@ Closes #
 
 ---
 **⚠️ 重要**: この変更をマージする前に、必ず開発環境での十分なテストとレビューを完了してください。
+<!-- for GitHub Copilot review rule -->
